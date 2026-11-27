@@ -39,6 +39,9 @@ TURN_TIMEOUT="${TURN_TIMEOUT:-2700}"     # seconds one turn may take
 # driver then estimates tokens from the agents' events. An assumption, not a bill.
 PRICE_IN="${PRICE_IN:-3}"
 PRICE_OUT="${PRICE_OUT:-15}"
+PRICE_CACHE_READ="${PRICE_CACHE_READ:-}" # default: a tenth of PRICE_IN
+# For the Cursor agent file here (Grok 4.7, not fast), xAI's list prices in 2026-11
+# were PRICE_IN=2 PRICE_OUT=6 PRICE_CACHE_READ=0.5; the fast variant costs double.
 SCENARIO_CONCURRENCY="${SCENARIO_CONCURRENCY:-2}"
 GRADE_JOBS="${GRADE_JOBS:-2}"
 GRADE_STRATEGIES="${GRADE_STRATEGIES:-concat,git-merge}"
@@ -56,6 +59,7 @@ if [[ -n "$AGENT_JSON" ]]; then
 fi
 export DIRECTOR_BUDGET_FILE="$BUDGET_FILE" DIRECTOR_BUDGET_USD="$BUDGET_USD"
 export DIRECTOR_COST_LIMIT="$COST_LIMIT" DIRECTOR_PRICE_IN="$PRICE_IN" DIRECTOR_PRICE_OUT="$PRICE_OUT"
+export DIRECTOR_PRICE_CACHE_READ="$PRICE_CACHE_READ"
 
 mkdir -p "$OUT"
 SAMPLE="$OUT/sample.txt"
@@ -77,12 +81,18 @@ for step in $STEPS; do
             --corpus "$CORPUS" --family "$FAMILY" --out "$SAMPLE"
         ;;
     run)
-        for corpus in ${CORPUS//,/ }; do
+        # One instance at a time, in the order drawn, until the budget is used up.
+        while IFS=$'\t' read -r corpus family instance; do
+            if ! uv run python "$HERE/budget_left.py" "$BUDGET_FILE" "$BUDGET_USD"; then
+                echo "budget of \$$BUDGET_USD used up: stopping before $instance" | tee -a "$OUT/run.log"
+                break
+            fi
+            echo "$family $instance" > "$OUT/one.txt"
             (cd running_instances/common && uv run python run.py --harness director --model "$MODEL" \
-                --corpus "$corpus" --family both --instances-file "$SAMPLE" "${SCENARIO_ARGS[@]}" \
+                --corpus "$corpus" --family both --instances-file "$OUT/one.txt" "${SCENARIO_ARGS[@]}" \
                 --scenario-concurrency "$SCENARIO_CONCURRENCY" --timeout "$TURN_TIMEOUT" \
                 --out "$OUT/runs/$corpus") 2>&1 | tee -a "$OUT/run.log"
-        done
+        done < "${SAMPLE%.txt}.order.tsv"
         ;;
     grade)
         for corpus in ${CORPUS//,/ }; do

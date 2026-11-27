@@ -45,7 +45,7 @@ def _director_runner(model_key: str, timeout: int) -> DirectorRunner:
     DIRECTOR_BUDGET_FILE, DIRECTOR_BUDGET_USD  a cap shared by every turn
     DIRECTOR_AGENT_JSON  file with a whole agent to use instead of a model
                          (e.g. Cursor over ACP); `--model` then only names the run
-    DIRECTOR_PRICE_IN, DIRECTOR_PRICE_OUT  dollars per million tokens, for an
+    DIRECTOR_PRICE_IN, DIRECTOR_PRICE_OUT, DIRECTOR_PRICE_CACHE_READ  dollars per million tokens, for an
                          agent that reports no usage
     """
     model, base_url, served = _director_model(model_key)
@@ -56,6 +56,8 @@ def _director_runner(model_key: str, timeout: int) -> DirectorRunner:
         extra += ["--agent-json", env("DIRECTOR_AGENT_JSON")]
     if env("DIRECTOR_PRICE_IN") and env("DIRECTOR_PRICE_OUT"):
         extra += ["--price-in", env("DIRECTOR_PRICE_IN"), "--price-out", env("DIRECTOR_PRICE_OUT")]
+        if env("DIRECTOR_PRICE_CACHE_READ"):
+            extra += ["--price-cache-read", env("DIRECTOR_PRICE_CACHE_READ")]
     return DirectorRunner(
         model,
         name=f"director__{served}",

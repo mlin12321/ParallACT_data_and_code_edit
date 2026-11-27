@@ -4,7 +4,7 @@
 
 Writes one `<family> <instance id>` line per instance, the format `run.py
 --instances-file` and `eval.grade` read. The instances are drawn from every
-corpus folder together, so a sample can span v1 and v2.
+corpus folder together, so a sample can span v1 and v2. `<out>.order.tsv` lists them in the order drawn.
 """
 
 from __future__ import annotations
@@ -20,14 +20,14 @@ FOLDERS = {
 }
 
 
-def instances(corpora: list[str], families: list[str]) -> list[tuple[str, str]]:
+def instances(corpora: list[str], families: list[str]) -> list[tuple[str, str, str]]:
     found = set()
     for corpus in corpora:
         for folder in FOLDERS[corpus]:
             for family in families:
                 for file in (folder / family).glob("*.json"):
                     if not file.name.endswith(".verification.json"):
-                        found.add((family, file.stem))
+                        found.add((family, file.stem, corpus))
     # Sorted, so that the draw does not depend on the order of the file system.
     return sorted(found)
 
@@ -43,8 +43,14 @@ def main() -> None:
     pool = instances(args.corpus.split(","), args.family.split(","))
     drawn = random.Random(args.seed).sample(pool, min(args.num, len(pool)))
     lines = [f"# seed={args.seed} num={args.num} of {len(pool)} ({args.corpus}; {args.family})"]
-    lines += [f"{family} {name}" for family, name in sorted(drawn)]
-    pathlib.Path(args.out).write_text("\n".join(lines) + "\n")
+    lines += [f"{family} {name}" for family, name, _ in sorted(drawn)]
+    out = pathlib.Path(args.out)
+    out.write_text("\n".join(lines) + "\n")
+    # The same instances in the order drawn: a run that stops early (budget)
+    # has then done a random part of the sample, not its alphabetical start.
+    out.with_suffix(".order.tsv").write_text(
+        "".join(f"{corpus}\t{family}\t{name}\n" for family, name, corpus in drawn)
+    )
     print(f"{len(drawn)} of {len(pool)} instances -> {args.out}")
 
 
