@@ -43,6 +43,7 @@ PRICE_CACHE_READ="${PRICE_CACHE_READ:-}" # default: a tenth of PRICE_IN
 # For the Cursor agent file here (Grok 4.7, not fast), xAI's list prices in 2026-11
 # were PRICE_IN=2 PRICE_OUT=6 PRICE_CACHE_READ=0.5; the fast variant costs double.
 SCENARIO_CONCURRENCY="${SCENARIO_CONCURRENCY:-2}"
+INSTANCE_CONCURRENCY="${INSTANCE_CONCURRENCY:-1}"   # instances worked on at once
 GRADE_JOBS="${GRADE_JOBS:-2}"
 GRADE_STRATEGIES="${GRADE_STRATEGIES:-concat,git-merge}"
 
@@ -81,18 +82,26 @@ for step in $STEPS; do
             --corpus "$CORPUS" --family "$FAMILY" --out "$SAMPLE"
         ;;
     run)
-        # One instance at a time, in the order drawn, until the budget is used up.
-        while IFS=$'\t' read -r corpus family instance; do
-            if ! uv run python "$HERE/budget_left.py" "$BUDGET_FILE" "$BUDGET_USD"; then
-                echo "budget of \$$BUDGET_USD used up: stopping before $instance" | tee -a "$OUT/run.log"
-                break
+        # In the order drawn, until the budget is used up.
+        one_instance() {
+            local corpus="$1" family="$2" instance="$3"
+            if ! uv run python "$HERE/budget_left.py" "$BUDGET_FILE" "$BUDGET_USD" >/dev/null; then
+                echo "budget of \$$BUDGET_USD used up: skipping $instance"
+                return 0
             fi
-            echo "$family $instance" > "$OUT/one.txt"
+            local one="$OUT/one_$instance.txt"
+            echo "$family $instance" > "$one"
             (cd running_instances/common && uv run python run.py --harness director --model "$MODEL" \
-                --corpus "$corpus" --family both --instances-file "$OUT/one.txt" "${SCENARIO_ARGS[@]}" \
+                --corpus "$corpus" --family both --instances-file "$one" $SCENARIO_FLAGS \
                 --scenario-concurrency "$SCENARIO_CONCURRENCY" --timeout "$TURN_TIMEOUT" \
-                --out "$OUT/runs/$corpus") 2>&1 | tee -a "$OUT/run.log"
-        done < "${SAMPLE%.txt}.order.tsv"
+                --out "$OUT/runs/$corpus") 2>&1
+            rm -f "$one"
+        }
+        export -f one_instance
+        export HERE OUT MODEL BUDGET_FILE BUDGET_USD SCENARIO_CONCURRENCY TURN_TIMEOUT
+        export SCENARIO_FLAGS="${SCENARIO_ARGS[*]}"
+        tr '\t' ' ' < "${SAMPLE%.txt}.order.tsv" \
+            | xargs -P "$INSTANCE_CONCURRENCY" -L 1 bash -c 'one_instance "$@"' _ 2>&1 | tee -a "$OUT/run.log"
         ;;
     grade)
         for corpus in ${CORPUS//,/ }; do
