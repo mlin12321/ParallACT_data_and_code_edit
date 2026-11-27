@@ -1,6 +1,6 @@
 """Agent-director backend: run a whole org of agents on the workspace.
 
-One turn is one `director-bench run`: it starts a director server of its own,
+One turn is one `director-eval run`: it starts a director server of its own,
 opens an org on the workspace with the turn's prompt, and ends when the org's
 accepted work landed in the workspace checkout. The driver's log is the
 transcript; its report on whether the org used its teams is kept beside it as
@@ -24,7 +24,7 @@ import time
 from ..types import TurnFailure, TurnResult, Usage
 from ..workspace import Workspace
 
-# Driver exit codes (director_bench.run).
+# Driver exit codes (director_eval_driver.run).
 _LANDED, _NOT_LANDED, _OVER_BUDGET = 0, 1, 3
 
 
@@ -81,11 +81,11 @@ class DirectorRunner:
             capture_output=True,
         ).returncode:
             subprocess.run(
-                ["git", "-C", str(workspace.path), "checkout", "-q", "-B", "director-bench"],
+                ["git", "-C", str(workspace.path), "checkout", "-q", "-B", "director-eval"],
                 check=True,
             )
         cmd = [
-            sys.executable, "-m", "director_bench", "run",
+            sys.executable, "-m", "director_eval_driver", "run",
             "--repo", str(workspace.path),
             "--prompt-file", str(task),
             "--out", str(out),

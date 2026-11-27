@@ -38,20 +38,29 @@ def _director_runner(model_key: str, timeout: int) -> DirectorRunner:
     """The director, set up from the environment:
 
     DIRECTOR_SDK         software-director-sdk checkout (default: beside this repo)
-    DIRECTOR_BENCH       director-bench checkout (default: beside this repo)
+    DIRECTOR_EVAL_DRIVER       director-eval checkout (default: beside this repo)
     DIRECTOR_API_KEY_ENV name of the variable with the API key (ANTHROPIC_API_KEY)
     DIRECTOR_MAX_DEPTH   most levels of teams; 1 forbids sub-teams (a solo run)
     DIRECTOR_COST_LIMIT  dollars one turn may spend
     DIRECTOR_BUDGET_FILE, DIRECTOR_BUDGET_USD  a cap shared by every turn
+    DIRECTOR_AGENT_JSON  file with a whole agent to use instead of a model
+                         (e.g. Cursor over ACP); `--model` then only names the run
+    DIRECTOR_PRICE_IN, DIRECTOR_PRICE_OUT  dollars per million tokens, for an
+                         agent that reports no usage
     """
     model, base_url, served = _director_model(model_key)
     env = os.environ.get
     depth = env("DIRECTOR_MAX_DEPTH")
+    extra: list[str] = []
+    if env("DIRECTOR_AGENT_JSON"):
+        extra += ["--agent-json", env("DIRECTOR_AGENT_JSON")]
+    if env("DIRECTOR_PRICE_IN") and env("DIRECTOR_PRICE_OUT"):
+        extra += ["--price-in", env("DIRECTOR_PRICE_IN"), "--price-out", env("DIRECTOR_PRICE_OUT")]
     return DirectorRunner(
         model,
         name=f"director__{served}",
         sdk=env("DIRECTOR_SDK") or str(_REPO.parent / "software-director-sdk"),
-        bench=env("DIRECTOR_BENCH") or str(_REPO.parent / "director-bench"),
+        bench=env("DIRECTOR_EVAL_DRIVER") or str(_REPO.parent / "DirectorEvalDriver"),
         keep_root=str(_REPO / ".local" / "director_state" / served),
         base_url=base_url,
         api_key_env=env("DIRECTOR_API_KEY_ENV") or "ANTHROPIC_API_KEY",
@@ -60,6 +69,7 @@ def _director_runner(model_key: str, timeout: int) -> DirectorRunner:
         cost_limit=float(env("DIRECTOR_COST_LIMIT")) if env("DIRECTOR_COST_LIMIT") else None,
         budget_file=env("DIRECTOR_BUDGET_FILE"),
         budget_usd=float(env("DIRECTOR_BUDGET_USD")) if env("DIRECTOR_BUDGET_USD") else None,
+        extra_args=tuple(extra),
     )
 
 
