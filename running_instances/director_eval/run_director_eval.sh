@@ -29,6 +29,10 @@ export DIRECTOR_API_KEY_ENV="${DIRECTOR_API_KEY_ENV:-ANTHROPIC_API_KEY}"
 AGENT_JSON="${AGENT_JSON:-}"
 LABEL="${LABEL:-}"                       # name of the run; default from MODEL or AGENT_JSON
 export DIRECTOR_MAX_DEPTH="${DIRECTOR_MAX_DEPTH:-}"   # 1 = no sub-teams (a solo run)
+# 1: the agents are told not to look anything up outside the machine (the fix
+# of a benchmark task is often one search away). The summary's `web` column
+# counts what they looked up anyway.
+export DIRECTOR_NO_WEB="${NO_WEB:-1}"
 
 # --- limits ---
 BUDGET_USD="${BUDGET_USD:-40}"           # every turn of every run on this ledger, together

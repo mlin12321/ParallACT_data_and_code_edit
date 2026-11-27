@@ -45,6 +45,7 @@ def main() -> None:
                 "proposals": sum(s.get("proposals", 0) for s in summaries),
                 "team_tool_calls": sum(s.get("team_tool_calls", 0) for s in summaries),
                 "agents": sum(s.get("agents", 0) for s in summaries),
+                "web_lookups": [look for turn in turns for look in turn.get("web_lookups") or []],
                 "cost": round(sum(r.get("cost") or 0 for r in results), 2),
                 "cost_estimated": any((turn.get("usage") or {}).get("estimated") for turn in turns),
                 "minutes": round(sum(r.get("wall_seconds") or 0 for r in results) / 60, 1),
@@ -58,15 +59,17 @@ def main() -> None:
         "scored_pass": sum(bool(row["scored_pass"]) for row in done),
         "landed": sum(bool(row["landed"]) for row in rows),
         "used_teams": sum(row["used_teams"] for row in rows),
+        "with_web_lookups": sum(bool(row["web_lookups"]) for row in rows),
+        "scored_pass_without_web_lookups": sum(bool(row["scored_pass"]) and not row["web_lookups"] for row in done),
         "cost": round(sum(row["cost"] for row in rows), 2),
         "ledger": load(pathlib.Path(args.ledger)) if args.ledger else None,
     }
-    print(f"{'instance':<58} {'scen':<16} land pass teams sub  cost   min")
+    print(f"{'instance':<58} {'scen':<16} land pass teams sub web  cost   min")
     for row in rows:
         print(
             f"{row['instance'][:57]:<58} {row['scenario'][:15]:<16} "
             f"{str(row['landed'])[0]:<4} {str(row['scored_pass'])[0]:<4} {str(row['used_teams'])[0]:<5} "
-            f"{row['sub_teams']:<3} {row['cost']:>6.2f} {row['minutes']:>5.1f}"
+            f"{row['sub_teams']:<3} {len(row['web_lookups']):<3} {row['cost']:>6.2f} {row['minutes']:>5.1f}"
         )
     print(json.dumps({k: v for k, v in total.items() if k != "ledger"}))
     if args.out:
