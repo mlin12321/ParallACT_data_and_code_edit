@@ -46,6 +46,8 @@ def main() -> None:
                 "team_tool_calls": sum(s.get("team_tool_calls", 0) for s in summaries),
                 "agents": sum(s.get("agents", 0) for s in summaries),
                 "web_lookups": [look for turn in turns for look in turn.get("web_lookups") or []],
+                "web_tools_refused": sum(len(r.get("web_tools_refused") or []) for r in results),
+                "hosts_refused": sorted({h for r in results for h in (r.get("network") or {}).get("refused") or []}),
                 "cost": round(sum(r.get("cost") or 0 for r in results), 2),
                 "cost_estimated": any((turn.get("usage") or {}).get("estimated") for turn in turns),
                 "minutes": round(sum(r.get("wall_seconds") or 0 for r in results) / 60, 1),

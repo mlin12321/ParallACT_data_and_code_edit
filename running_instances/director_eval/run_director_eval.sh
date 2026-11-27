@@ -29,10 +29,17 @@ export DIRECTOR_API_KEY_ENV="${DIRECTOR_API_KEY_ENV:-ANTHROPIC_API_KEY}"
 AGENT_JSON="${AGENT_JSON:-}"
 LABEL="${LABEL:-}"                       # name of the run; default from MODEL or AGENT_JSON
 export DIRECTOR_MAX_DEPTH="${DIRECTOR_MAX_DEPTH:-}"   # 1 = no sub-teams (a solo run)
-# 1: the agents are told not to look anything up outside the machine (the fix
-# of a benchmark task is often one search away). The summary's `web` column
-# counts what they looked up anyway.
+# The fix of a benchmark task is often one search away, and the benchmark
+# itself blocks nothing. Two settings, both on by default:
+# NO_WEB=1: the agents are told to work from the repository alone, and an
+#   agent CLI's own web search and fetch (which run on its provider's side)
+#   are refused. The summary's `web` column counts lookups that got through.
+# NET_ALLOW: the whole run has no network except these hosts and their
+#   subdomains (needs bubblewrap). The default is what Cursor's CLI needs; for
+#   a model called over an API name its host instead, e.g. api.anthropic.com.
+#   Add package registries if the agents must install dependencies. Empty: no block.
 export DIRECTOR_NO_WEB="${NO_WEB:-1}"
+export DIRECTOR_NET_ALLOW="${NET_ALLOW-api2.cursor.sh,api2direct.cursor.sh,api3.cursor.sh,api5.cursor.sh,repo42.cursor.sh}"
 
 # --- limits ---
 BUDGET_USD="${BUDGET_USD:-40}"           # every turn of every run on this ledger, together
@@ -74,6 +81,7 @@ SCENARIO_ARGS=(); for s in $SCENARIOS; do SCENARIO_ARGS+=(--scenario "$s"); done
 
 {
     echo "run=$RUN_NAME harness_model=$HARNESS_MODEL seed=$SEED num=$NUM_TASKS corpus=$CORPUS"
+    echo "no_web=$DIRECTOR_NO_WEB net_allow=${DIRECTOR_NET_ALLOW:-everything}"
     echo "scenarios=$SCENARIOS budget=\$$BUDGET_USD ($BUDGET_FILE) per_turn=\$$COST_LIMIT timeout=${TURN_TIMEOUT}s"
     echo "sdk=$(git -C "$DIRECTOR_SDK" rev-parse --short HEAD) driver=$(git -C "$DIRECTOR_EVAL_DRIVER" rev-parse --short HEAD) parallact=$(git -C "$REPO" rev-parse --short HEAD)"
 } | tee "$OUT/settings.txt"
