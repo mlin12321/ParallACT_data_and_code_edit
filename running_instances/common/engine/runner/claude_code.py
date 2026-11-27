@@ -270,6 +270,9 @@ class ClaudeCodeRunner:
             cmd += ["--model", self.model]
         if self.effort:
             cmd += ["--effort", self.effort]
+        # A cap on what one turn may spend, in dollars (Claude Code enforces it).
+        if os.environ.get("CLAUDE_MAX_BUDGET_USD"):
+            cmd += ["--max-budget-usd", os.environ["CLAUDE_MAX_BUDGET_USD"]]
         tag = f"turn {index} ({agent})"
 
         attempt = 0
