@@ -9,21 +9,91 @@ from __future__ import annotations
 
 import pathlib
 
-from endpoints import get
+import os
+
+from endpoints import ENDPOINTS, get
 from engine.runner.claude_code import ClaudeCodeRunner
 from engine.runner.codex import CodexRunner
+from engine.runner.director import DirectorRunner
 from engine.runner.opencode import OpencodeRunner
 
-HARNESSES = ("claude", "codex", "opencode")
+HARNESSES = ("claude", "codex", "opencode", "director")
 _HERE = pathlib.Path(__file__).resolve().parent
+_REPO = _HERE.parent.parent
+
+
+def _director_model(model_key: str) -> tuple[str, str | None, str]:
+    """(LiteLLM model, base URL, output-namespace name) for the director.
+
+    A key of the endpoint table is that vLLM model; anything else is a LiteLLM
+    model name used as it is, e.g. `anthropic/claude-sonnet-5-5`.
+    """
+    if model_key in ENDPOINTS:
+        ep = get(model_key)
+        return f"openai/{ep.served_name}", ep.openai_base, ep.served_name
+    return model_key, os.environ.get("DIRECTOR_BASE_URL"), model_key.split("/")[-1]
+
+
+def _director_runner(model_key: str, timeout: int) -> DirectorRunner:
+    """The director, set up from the environment:
+
+    DIRECTOR_SDK         software-director-sdk checkout (default: beside this repo)
+    DIRECTOR_EVAL_DRIVER       director-eval checkout (default: beside this repo)
+    DIRECTOR_API_KEY_ENV name of the variable with the API key (ANTHROPIC_API_KEY)
+    DIRECTOR_MAX_DEPTH   most levels of teams; 1 forbids sub-teams (a solo run)
+    DIRECTOR_COST_LIMIT  dollars one turn may spend
+    DIRECTOR_BUDGET_FILE, DIRECTOR_BUDGET_USD  a cap shared by every turn
+    DIRECTOR_AGENT_JSON  file with a whole agent to use instead of a model
+                         (e.g. Cursor over ACP); `--model` then only names the run
+    DIRECTOR_NO_WEB=1    tell the agents to work from the repository alone, and
+                         refuse the web search and fetch of an agent CLI
+    DIRECTOR_NET_ALLOW   run with no network except these hosts (comma separated)
+    DIRECTOR_PRICE_IN, DIRECTOR_PRICE_OUT, DIRECTOR_PRICE_CACHE_READ  dollars per million tokens, for an
+                         agent that reports no usage
+    """
+    model, base_url, served = _director_model(model_key)
+    env = os.environ.get
+    depth = env("DIRECTOR_MAX_DEPTH")
+    extra: list[str] = []
+    if env("DIRECTOR_AGENT_JSON"):
+        extra += ["--agent-json", env("DIRECTOR_AGENT_JSON")]
+    if env("DIRECTOR_NO_WEB") == "1":
+        extra.append("--no-web")
+    if env("DIRECTOR_NET_ALLOW"):
+        extra += ["--net-allow", env("DIRECTOR_NET_ALLOW")]
+    if env("DIRECTOR_PRICE_IN") and env("DIRECTOR_PRICE_OUT"):
+        extra += ["--price-in", env("DIRECTOR_PRICE_IN"), "--price-out", env("DIRECTOR_PRICE_OUT")]
+        if env("DIRECTOR_PRICE_CACHE_READ"):
+            extra += ["--price-cache-read", env("DIRECTOR_PRICE_CACHE_READ")]
+    return DirectorRunner(
+        model,
+        name=f"director__{served}",
+        sdk=env("DIRECTOR_SDK") or str(_REPO.parent / "software-director-sdk"),
+        bench=env("DIRECTOR_EVAL_DRIVER") or str(_REPO.parent / "DirectorEvalDriver"),
+        keep_root=str(_REPO / ".local" / "director_state" / served),
+        base_url=base_url,
+        api_key_env=env("DIRECTOR_API_KEY_ENV") or "ANTHROPIC_API_KEY",
+        timeout=timeout,
+        max_depth=int(depth) if depth else None,
+        cost_limit=float(env("DIRECTOR_COST_LIMIT")) if env("DIRECTOR_COST_LIMIT") else None,
+        budget_file=env("DIRECTOR_BUDGET_FILE"),
+        budget_usd=float(env("DIRECTOR_BUDGET_USD")) if env("DIRECTOR_BUDGET_USD") else None,
+        extra_args=tuple(extra),
+    )
 
 
 def harness_model_label(harness: str, model_key: str) -> str:
     """Output-namespace segment, e.g. claude__qwen3-flash-next."""
+    if harness == "director":
+        # A solo run (no sub-teams) is kept apart from one that may split.
+        solo = "-solo" if os.environ.get("DIRECTOR_MAX_DEPTH") == "1" else ""
+        return f"director{solo}__{_director_model(model_key)[2]}"
     return f"{harness}__{get(model_key).served_name}"
 
 
 def make_runner(harness: str, model_key: str, timeout: int = 3600):
+    if harness == "director":
+        return _director_runner(model_key, timeout)
     ep = get(model_key)
     if harness == "claude":
         return ClaudeCodeRunner.for_vllm(

@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Run the agent-director on a fixed random sample of ParallACT, grade it and
+# summarize it. Every setting is a variable below; override any of them in the
+# environment:
+#
+#   NUM_TASKS=5 SCENARIOS="oracle parallel_unaware" ./run_director_eval.sh
+#   STEPS="grade summarize" ./run_director_eval.sh      # only those steps
+#
+# The run can be stopped and started again: finished bundles are skipped, and
+# the budget ledger remembers what was spent.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$HERE/../.." && pwd)"
+
+# --- what to run ---
+SEED="${SEED:-20261127}"                 # fixes the sample
+NUM_TASKS="${NUM_TASKS:-30}"             # instances drawn at most
+CORPUS="${CORPUS:-v1,v2}"                # v1, v2 or both
+FAMILY="${FAMILY:-contradictory,complementary}"
+SCENARIOS="${SCENARIOS:-oracle}"         # see scenarios.py; oracle = one org, both requests
+STEPS="${STEPS:-sample run grade summarize}"
+
+# --- the agents ---
+# Either a LiteLLM model the director's own agents call (needs its API key) ...
+MODEL="${MODEL:-anthropic/claude-sonnet-5-5}"
+export DIRECTOR_API_KEY_ENV="${DIRECTOR_API_KEY_ENV:-ANTHROPIC_API_KEY}"
+# ... or a whole agent, e.g. Cursor over ACP (agents/cursor.json). It then names the run.
+AGENT_JSON="${AGENT_JSON:-}"
+LABEL="${LABEL:-}"                       # name of the run; default from MODEL or AGENT_JSON
+export DIRECTOR_MAX_DEPTH="${DIRECTOR_MAX_DEPTH:-}"   # 1 = no sub-teams (a solo run)
+# The fix of a benchmark task is often one search away, and the benchmark
+# itself blocks nothing. Two settings, both on by default:
+# NO_WEB=1: the agents are told to work from the repository alone, and an
+#   agent CLI's own web search and fetch (which run on its provider's side)
+#   are refused. The summary's `web` column counts lookups that got through.
+# NET_ALLOW: the whole run has no network except these hosts and their
+#   subdomains (needs bubblewrap). The default is what Cursor's CLI needs; for
+#   a model called over an API name its host instead, e.g. api.anthropic.com.
+#   Add package registries if the agents must install dependencies. Empty: no block.
+export DIRECTOR_NO_WEB="${NO_WEB:-1}"
+export DIRECTOR_NET_ALLOW="${NET_ALLOW-api2.cursor.sh,api2direct.cursor.sh,api3.cursor.sh,api5.cursor.sh,repo42.cursor.sh}"
+
+# --- limits ---
+BUDGET_USD="${BUDGET_USD:-40}"           # every turn of every run on this ledger, together
+BUDGET_FILE="${BUDGET_FILE:-$REPO/.local/director_budget.json}"
+COST_LIMIT="${COST_LIMIT:-5}"            # dollars one turn may spend
+TURN_TIMEOUT="${TURN_TIMEOUT:-2700}"     # seconds one turn may take
+# Dollars per million tokens, for an agent that reports no usage (Cursor): the
+# driver then estimates tokens from the agents' events. An assumption, not a bill.
+PRICE_IN="${PRICE_IN:-3}"
+PRICE_OUT="${PRICE_OUT:-15}"
+PRICE_CACHE_READ="${PRICE_CACHE_READ:-}" # default: a tenth of PRICE_IN
+# For the Cursor agent file here (Grok 4.7, not fast), xAI's list prices in 2026-11
+# were PRICE_IN=2 PRICE_OUT=6 PRICE_CACHE_READ=0.5; the fast variant costs double.
+SCENARIO_CONCURRENCY="${SCENARIO_CONCURRENCY:-2}"
+INSTANCE_CONCURRENCY="${INSTANCE_CONCURRENCY:-1}"   # instances worked on at once
+GRADE_JOBS="${GRADE_JOBS:-2}"
+GRADE_STRATEGIES="${GRADE_STRATEGIES:-concat,git-merge}"
+
+# --- where things are ---
+export DIRECTOR_SDK="${DIRECTOR_SDK:-$REPO/../software-director-sdk}"
+export DIRECTOR_EVAL_DRIVER="${DIRECTOR_EVAL_DRIVER:-$REPO/../DirectorEvalDriver}"
+RUN_NAME="${RUN_NAME:-seed${SEED}_n${NUM_TASKS}}"
+OUT="${OUT:-$REPO/.local/director_eval/$RUN_NAME}"
+
+if [[ -n "$AGENT_JSON" ]]; then
+    AGENT_JSON="$(realpath "$AGENT_JSON")"
+    export DIRECTOR_AGENT_JSON="$AGENT_JSON"
+    MODEL="${LABEL:-$(basename "$AGENT_JSON" .json)}"
+fi
+export DIRECTOR_BUDGET_FILE="$BUDGET_FILE" DIRECTOR_BUDGET_USD="$BUDGET_USD"
+export DIRECTOR_COST_LIMIT="$COST_LIMIT" DIRECTOR_PRICE_IN="$PRICE_IN" DIRECTOR_PRICE_OUT="$PRICE_OUT"
+export DIRECTOR_PRICE_CACHE_READ="$PRICE_CACHE_READ"
+
+mkdir -p "$OUT"
+SAMPLE="$OUT/sample.txt"
+SOLO=""; [[ "$DIRECTOR_MAX_DEPTH" == "1" ]] && SOLO="-solo"
+HARNESS_MODEL="director${SOLO}__${MODEL##*/}"
+SCENARIO_ARGS=(); for s in $SCENARIOS; do SCENARIO_ARGS+=(--scenario "$s"); done
+
+{
+    echo "run=$RUN_NAME harness_model=$HARNESS_MODEL seed=$SEED num=$NUM_TASKS corpus=$CORPUS"
+    echo "no_web=$DIRECTOR_NO_WEB net_allow=${DIRECTOR_NET_ALLOW:-everything}"
+    echo "scenarios=$SCENARIOS budget=\$$BUDGET_USD ($BUDGET_FILE) per_turn=\$$COST_LIMIT timeout=${TURN_TIMEOUT}s"
+    echo "sdk=$(git -C "$DIRECTOR_SDK" rev-parse --short HEAD) driver=$(git -C "$DIRECTOR_EVAL_DRIVER" rev-parse --short HEAD) parallact=$(git -C "$REPO" rev-parse --short HEAD)"
+} | tee "$OUT/settings.txt"
+
+cd "$REPO"
+for step in $STEPS; do
+    case "$step" in
+    sample)
+        uv run python "$HERE/sample_instances.py" --seed "$SEED" --num "$NUM_TASKS" \
+            --corpus "$CORPUS" --family "$FAMILY" --out "$SAMPLE"
+        ;;
+    run)
+        # In the order drawn, until the budget is used up.
+        one_instance() {
+            local corpus="$1" family="$2" instance="$3"
+            if ! uv run python "$HERE/budget_left.py" "$BUDGET_FILE" "$BUDGET_USD" >/dev/null; then
+                echo "budget of \$$BUDGET_USD used up: skipping $instance"
+                return 0
+            fi
+            local one="$OUT/one_$instance.txt"
+            echo "$family $instance" > "$one"
+            (cd running_instances/common && uv run python run.py --harness director --model "$MODEL" \
+                --corpus "$corpus" --family both --instances-file "$one" $SCENARIO_FLAGS \
+                --scenario-concurrency "$SCENARIO_CONCURRENCY" --timeout "$TURN_TIMEOUT" \
+                --out "$OUT/runs/$corpus") 2>&1
+            rm -f "$one"
+        }
+        export -f one_instance
+        export HERE OUT MODEL BUDGET_FILE BUDGET_USD SCENARIO_CONCURRENCY TURN_TIMEOUT
+        export SCENARIO_FLAGS="${SCENARIO_ARGS[*]}"
+        tr '\t' ' ' < "${SAMPLE%.txt}.order.tsv" \
+            | xargs -P "$INSTANCE_CONCURRENCY" -L 1 bash -c 'one_instance "$@"' _ 2>&1 | tee -a "$OUT/run.log"
+        ;;
+    grade)
+        for corpus in ${CORPUS//,/ }; do
+            for folder in $( [[ $corpus == v1 ]] && echo "generated seeds" || echo "generated" ); do
+                uv run python -m eval.grade --input-folder "dataset/$corpus/$folder" --family both \
+                    --runs "$OUT/runs/$corpus" --out "$OUT/eval/$corpus" --harness-model "$HARNESS_MODEL" \
+                    "${SCENARIO_ARGS[@]}" --strategies "$GRADE_STRATEGIES" --jobs "$GRADE_JOBS" \
+                    2>&1 | tee -a "$OUT/grade.log"
+            done
+        done
+        ;;
+    summarize)
+        uv run python "$HERE/summarize.py" --runs "$OUT/runs" --eval "$OUT/eval" \
+            --harness-model "$HARNESS_MODEL" --ledger "$BUDGET_FILE" --out "$OUT/summary.json" \
+            | tee "$OUT/summary.txt"
+        ;;
+    *) echo "unknown step: $step" >&2; exit 2 ;;
+    esac
+done

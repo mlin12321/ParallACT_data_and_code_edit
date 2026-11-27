@@ -106,4 +106,6 @@ def write(result: RunResult, tracked_dir: Path, heavy_dir: Path) -> Path:
         (d / "prompt.txt").write_text(t.prompt, encoding="utf-8")
         (d / "transcript.log").write_text(t.transcript, encoding="utf-8")
         (d / "turn.patch").write_text(t.diff, encoding="utf-8")
+        for name, content in t.extras.items():
+            (d / name).write_text(content, encoding="utf-8")
     return tracked_dir
