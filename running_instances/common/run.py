@@ -35,7 +35,7 @@ CORPUS_INPUTS = {
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--harness", required=True, help="claude|codex|opencode")
+    ap.add_argument("--harness", required=True, help="claude|codex|opencode|director")
     ap.add_argument("--model", default="qwen")
     ap.add_argument(
         "--corpus",

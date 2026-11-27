@@ -105,6 +105,8 @@ class TurnResult:
     transcript: str
     diff: str  # patch produced this turn
     usage: Usage | None = None
+    # Further files a runner keeps with the turn, by name (e.g. team_usage.json).
+    extras: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
